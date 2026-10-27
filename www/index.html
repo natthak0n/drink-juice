@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="th"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>ดื่มน้ำผลไม้</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;touch-action:none}
+html,body{margin:0;height:100%;overflow:hidden;font-family:"Noto Sans Thai","Sarabun",sans-serif;background:#fff3c4}
+.screen{position:absolute;inset:0}
+.hidden{display:none!important}
+#menu{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3vh;padding:16px;background:linear-gradient(#fff3c4,#ffd9ea)}
+h1{font-size:min(11vw,52px);margin:0;color:#ff6f3c;text-shadow:0 4px 0 #fff}
+.sub{font-size:min(5vw,22px);color:#7a4b2a;margin:0}
+#juices{display:grid;grid-template-columns:1fr 1fr;gap:14px;width:100%;max-width:400px}
+.j{border:6px solid #fff;border-radius:30px;padding:16px 4px;font:700 min(5.6vw,24px) "Noto Sans Thai",sans-serif;color:#fff;text-shadow:0 2px 0 rgba(0,0,0,.25)}
+.j span{display:block;font-size:min(13vw,56px)}
+.j.sel{border-color:#333;transform:scale(1.06)}
+.big{border:0;border-radius:40px;padding:18px 44px;font:800 min(8vw,34px) "Noto Sans Thai",sans-serif;color:#fff;background:#ff6f3c;box-shadow:0 8px 0 #c9481c}
+.big:active{transform:translateY(6px);box-shadow:0 2px 0 #c9481c}
+#cv{position:absolute;inset:0}
+.hud{position:absolute;top:max(env(safe-area-inset-top),10px);display:flex;gap:10px;align-items:center;left:12px;right:12px;justify-content:space-between}
+.pill{background:#fff;border-radius:30px;padding:8px 18px;font:700 min(6vw,26px) "Noto Sans Thai",sans-serif;color:#7a4b2a;box-shadow:0 4px 0 rgba(0,0,0,.12);border:0}
+#done{display:flex;flex-direction:column;align-items:center;gap:20px;justify-content:flex-end;padding-bottom:12vh;pointer-events:none}
+#done .big{pointer-events:auto}
+#done h2{font-size:min(10vw,46px);margin:0;color:#e0335a;text-shadow:0 4px 0 #fff}
+</style></head><body>
+<div id="menu" class="screen">
+  <h1>🥤 ดื่มน้ำผลไม้</h1>
+  <p class="sub">เลือกน้ำผลไม้ที่ชอบ</p>
+  <div id="juices"></div>
+  <button class="big" id="start">เริ่มเล่น</button>
+</div>
+<div id="play" class="screen hidden">
+  <canvas id="cv"></canvas>
+  <div class="hud">
+    <button class="pill" id="home">🏠</button>
+    <div class="pill">🥤 <span id="cups">0</span> แก้ว</div>
+    <button class="pill" id="snd">🔊</button>
+  </div>
+  <div id="done" class="screen hidden"><h2>หมดแก้ว! อร่อยจัง</h2><button class="big" id="refill">เติมใหม่</button></div>
+</div>
+<script>
+(()=>{
+// ====== ปรับแต่งได้ที่นี่ ======
+const CFG={
+  START_TILT:30,  // องศาที่เริ่มดื่ม
+  DRAIN:0.25,     // ความเร็วน้ำลด (แก้วต่อวินาที ตอนเอียง 90°) ยิ่งมากยิ่งหมดเร็ว
+  WAVE:4,         // ความสูงคลื่นผิวน้ำ (พิกเซล)
+  INVERT:false    // ถ้าผิวน้ำเอียงผิดข้าง ให้เปลี่ยนเป็น true
+};
+const JUICES=[
+  {n:'น้ำส้ม',c:'#ffa31f',d:'#e87800',e:'🍊'},
+  {n:'น้ำแตงโม',c:'#ff6384',d:'#e0335a',e:'🍉'},
+  {n:'น้ำองุ่น',c:'#9b59d0',d:'#6f2aa8',e:'🍇'},
+  {n:'น้ำมะนาว',c:'#93dc3c',d:'#62b01a',e:'🍋'}
+];
+// ===============================
+const COL=['#ff6f3c','#ffd23f','#ff6384','#4cc9f0','#8bd835','#b565e8'];
+const $=id=>document.getElementById(id);
+const cv=$('cv'),ctx=cv.getContext('2d');
+let cur=0,level=1,state='menu',sound=true,cups=0,ac=null,w,h,dpr;
+try{cups=+localStorage.getItem('cups')||0}catch(e){}
+$('cups').textContent=cups;
+function resize(){dpr=devicePixelRatio||1;w=innerWidth;h=innerHeight;cv.width=w*dpr;cv.height=h*dpr;cv.style.width=w+'px';cv.style.height=h+'px';ctx.setTransform(dpr,0,0,dpr,0,0)}
+addEventListener('resize',resize);resize();
+
+const box=$('juices');
+JUICES.forEach((j,i)=>{const b=document.createElement('button');b.className='j'+(i?'':' sel');b.style.background=j.c;b.innerHTML=`<span>${j.e}</span>${j.n}`;
+  b.onclick=()=>{cur=i;[...box.children].forEach((x,k)=>x.classList.toggle('sel',k==i))};box.appendChild(b)});
+
+// ===== เซนเซอร์ =====
+let ax=0,ay=9.8,az=0,lastMotion=0;
+addEventListener('devicemotion',e=>{const a=e.accelerationIncludingGravity;if(a&&a.y!=null){ax=a.x;ay=a.y;az=a.z;lastMotion=performance.now()}});
+// ทดสอบบนคอมพิวเตอร์: เลื่อนเมาส์ซ้าย-ขวา
+addEventListener('pointermove',e=>{if(performance.now()-lastMotion>1500&&state=='play'){const a=(e.clientX/w-.5)*2.6;ax=Math.sin(a)*9.8;ay=Math.cos(a)*9.8;az=0}});
+
+// ===== เสียง (สร้างด้วยโค้ด ไม่ต้องมีไฟล์) =====
+function tone(f1,f2,dur,type,vol,delay=0){if(!sound||!ac)return;const t=ac.currentTime+delay,o=ac.createOscillator(),g=ac.createGain();
+  o.type=type;o.frequency.setValueAtTime(f1,t);o.frequency.exponentialRampToValueAtTime(f2,t+dur);
+  g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(.001,t+dur);o.connect(g);g.connect(ac.destination);o.start(t);o.stop(t+dur+.02)}
+const gulp=()=>tone(280,110,.15,'sine',.4);
+const cheer=()=>[523,659,784,1047].forEach((f,i)=>tone(f,f,.25,'triangle',.3,i*.14));
+$('snd').onclick=()=>{sound=!sound;$('snd').textContent=sound?'🔊':'🔇'};
+
+// ===== สถานะเกม =====
+function show(s){state=s;$('menu').classList.toggle('hidden',s!='menu');$('play').classList.toggle('hidden',s=='menu');$('done').classList.toggle('hidden',s!='done')}
+$('start').onclick=()=>{if(!ac){try{ac=new(window.AudioContext||window.webkitAudioContext)()}catch(e){}}ac&&ac.resume();level=1;parts=[];show('play')};
+$('refill').onclick=()=>{level=1;parts=[];show('play')};
+$('home').onclick=()=>show('menu');
+
+let tiltS=0,angS=0,prevAng=0,sl=0,tm=0,gt=0,parts=[],last=performance.now();
+function finish(){show('done');cups++;$('cups').textContent=cups;try{localStorage.setItem('cups',cups)}catch(e){}cheer();
+  for(let i=0;i<50;i++){const b=i%3==0;parts.push(b?{b:1,x:Math.random()*w,y:h+30,vx:(Math.random()-.5)*30,vy:-60-Math.random()*90,c:COL[i%6],s:24+Math.random()*12}
+   :{b:0,x:w/2,y:h*.4,vx:(Math.random()-.5)*500,vy:-150-Math.random()*400,c:COL[i%6],s:10+Math.random()*12,r:0})}}
+function update(dt){
+  const g=Math.hypot(ax,ay,az)||1,tilt=Math.acos(Math.max(-1,Math.min(1,ay/g)))*180/Math.PI;
+  let ang=Math.atan2(ax,ay)*Math.min(1,Math.hypot(ax,ay)/3)*(CFG.INVERT?-1:1);
+  ang=Math.max(-.95,Math.min(.95,ang));
+  tiltS+=(tilt-tiltS)*.2;angS+=(ang-angS)*.2;
+  sl=sl*.94+Math.abs(angS-prevAng)*25;prevAng=angS;sl=Math.min(sl,3);
+  if(state=='play'&&tiltS>CFG.START_TILT){
+    level-=CFG.DRAIN*Math.min(1.3,(tiltS-CFG.START_TILT)/(90-CFG.START_TILT))*dt;
+    gt+=dt;if(gt>.38){gt=0;gulp()}
+    if(level<=0){level=0;finish()}
+  }
+  parts=parts.filter(p=>{p.x+=p.vx*dt;p.y+=p.vy*dt;if(!p.b){p.vy+=700*dt;p.r+=dt*4}return p.y<h+60&&p.y>-80});
+}
+function star(x,y,r,rot,c){ctx.beginPath();for(let i=0;i<10;i++){const a=rot+i*Math.PI/5-Math.PI/2,q=i%2?r*.45:r;ctx.lineTo(x+Math.cos(a)*q,y+Math.sin(a)*q)}ctx.closePath();ctx.fillStyle=c;ctx.fill()}
+function draw(){
+  const bg=ctx.createLinearGradient(0,0,0,h);bg.addColorStop(0,'#bfe9ff');bg.addColorStop(1,'#fff3c4');ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);
+  const gw=Math.min(w*.72,340),gh=gw*1.2,cx=w/2,top=h*.5-gh*.55,bot=top+gh,tw=gw,bw=gw*.7,r=gw*.12;
+  const path=()=>{ctx.beginPath();ctx.moveTo(cx-tw/2,top);ctx.lineTo(cx+tw/2,top);ctx.lineTo(cx+bw/2,bot-r);ctx.quadraticCurveTo(cx+bw/2,bot,cx+bw/2-r,bot);ctx.lineTo(cx-bw/2+r,bot);ctx.quadraticCurveTo(cx-bw/2,bot,cx-bw/2,bot-r);ctx.closePath()};
+  ctx.fillStyle='rgba(0,0,0,.12)';ctx.beginPath();ctx.ellipse(cx,bot+8,bw*.6,12,0,0,7);ctx.fill();
+  const J=JUICES[cur];
+  ctx.save();path();ctx.fillStyle='rgba(255,255,255,.5)';ctx.fill();ctx.clip();
+  if(level>0){
+    ctx.translate(cx,bot-level*gh);ctx.rotate(angS);
+    const A=CFG.WAVE*(1+sl);ctx.beginPath();ctx.moveTo(-500,900);
+    for(let x=-500;x<=500;x+=20)ctx.lineTo(x,Math.sin(x*.03+tm*3)*A+Math.sin(x*.07-tm*2)*A*.5);
+    ctx.lineTo(500,900);ctx.closePath();
+    const gr=ctx.createLinearGradient(0,0,0,gh);gr.addColorStop(0,J.c);gr.addColorStop(1,J.d);ctx.fillStyle=gr;ctx.fill();
+  }
+  ctx.restore();
+  path();ctx.lineWidth=9;ctx.strokeStyle='rgba(255,255,255,.9)';ctx.stroke();ctx.lineWidth=3;ctx.strokeStyle='rgba(90,160,210,.8)';ctx.stroke();
+  ctx.fillStyle='rgba(255,255,255,.7)';ctx.fillRect(cx-tw/2+gw*.1,top+gh*.12,gw*.05,gh*.4);
+  const fy=top+gh*.45;ctx.fillStyle='#4a2c1a';ctx.beginPath();ctx.arc(cx-gw*.13,fy,gw*.035,0,7);ctx.arc(cx+gw*.13,fy,gw*.035,0,7);ctx.fill();
+  ctx.strokeStyle='#4a2c1a';ctx.lineWidth=4;ctx.lineCap='round';ctx.beginPath();
+  if(state=='done'||tiltS>CFG.START_TILT)ctx.ellipse(cx,fy+gw*.1,gw*.05,gw*.06,0,0,7);else ctx.arc(cx,fy+gw*.04,gw*.1,.2,Math.PI-.2);
+  ctx.stroke();
+  for(const p of parts){
+    if(p.b){ctx.strokeStyle='#999';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(p.x,p.y+p.s*1.2);ctx.lineTo(p.x+6,p.y+p.s*2.6);ctx.stroke();ctx.fillStyle=p.c;ctx.beginPath();ctx.ellipse(p.x,p.y,p.s*.8,p.s,0,0,7);ctx.fill()}
+    else star(p.x,p.y,p.s,p.r,p.c);
+  }
+}
+function loop(now){const dt=Math.min(.05,(now-last)/1000);last=now;tm+=dt;if(state!='menu'){update(dt);draw()}requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+})();
+</script></body></html>
